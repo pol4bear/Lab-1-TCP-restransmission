@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 )
 
 func main() {
@@ -25,6 +26,8 @@ func main() {
 	fmt.Printf("New connection from %s.\n", conn.RemoteAddr())
 	conn.Write([]byte("A"))
 	fmt.Printf("\"A\" sent to %s.\n", conn.RemoteAddr())
+	fmt.Println("Wating 0.5 seconds")
+	time.Sleep(time.Millisecond * 500)
 	conn.Close()
 	fmt.Printf("Connection closed.\n")
 }
