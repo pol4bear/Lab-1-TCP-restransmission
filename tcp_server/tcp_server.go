@@ -17,6 +17,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to bind address on %s. err = %v", address, err)
 	}
+	fmt.Printf("Server started at %s\n", address)
 	conn, err := listen.Accept()
 	if err != nil {
 		log.Fatalf("Failed to accept from client. err = %v", err)
