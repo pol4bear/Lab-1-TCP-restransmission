@@ -5,6 +5,35 @@
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 
+uint16_t compute_checksum(uint16_t sum, uint16_t *buf, int size) {
+        while (size > 1) {
+            sum += *buf++;
+            size -= sizeof(uint16_t);
+        }
+        if (size)
+            sum += *(uint8_t *)buf;
+
+        sum = (sum >> 16) + (sum & 0xffff);
+        sum += (sum >> 16);
+
+        return (uint16_t)(~sum);
+}
+
+uint16_t get_tcp_checksum(struct iphdr *ip_header, struct tcphdr *tcp_header, uint32_t packet_length) {
+    uint32_t sum = 0;
+    uint32_t tcp_length = packet_length - ip_header->ihl * 4;
+
+    tcp_header->check = 0;
+    sum += (ip_header->saddr >> 16) & 0xFFFF;
+    sum += (ip_header->saddr) & 0xFFFF;
+    sum += (ip_header->daddr >> 16) & 0xFFFF;
+    sum += (ip_header->daddr) & 0xFFFF;
+    sum += htons(IPPROTO_TCP);
+    sum += htons(tcp_length);
+
+    return compute_checksum(sum, (uint16_t *)tcp_header, tcp_length) - 6;
+}
+
 int main(int argc, char *argv[]) {
     uint16_t port = 0;
     pcap_t *handle = NULL;
@@ -14,7 +43,7 @@ int main(int argc, char *argv[]) {
     struct bpf_program fp;
     int res = 0;
     struct pcap_pkthdr *pkt_hdr = NULL;
-    uint8_t *pkt = NULL;
+    uint8_t *pkt = NULL, *pkt_ptr = NULL;
     struct ether_header *eth_hdr = NULL;
     struct iphdr *ip_hdr = NULL;
     struct tcphdr *tcp_hdr = NULL;
@@ -30,8 +59,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "%s is not valid port!", argv[2]);
         return 1;
     }
-    filter = (char*)calloc(sizeof(int), 30);
-    sprintf(filter, "tcp.len>0&&tcp.srcport==%d", port);
+    filter = (char*)calloc(sizeof(int), 19);
+    sprintf(filter, "tcp src port %d", port);
     port = htons(port);
 
     if(pcap_lookupnet(argv[1], &net, &mask, errbuf) == -1) {
@@ -40,7 +69,7 @@ int main(int argc, char *argv[]) {
     }
     handle = pcap_open_live(argv[1], BUFSIZ, 1, 1000, errbuf);
     if(handle == NULL) {
-        fprintf(stderr, "Failed to open pcap handle on %s: %s\n", argv[1], errbuf);
+        fprintf(stderr, "Failed to open pcap handle: %s\n", errbuf);
         return 1;
     }
     else if(pcap_compile(handle, &fp, filter, 0, net) == -1) {
@@ -65,27 +94,21 @@ int main(int argc, char *argv[]) {
         if(pkt_hdr->caplen < 1)
             continue;
 
-        eth_hdr = (struct ehter_header*)pkt;
-        if(eth_hdr->ether_type != ETHERTYPE_IP) {
-            continue;
-        }
+        pkt_ptr = pkt;
+        eth_hdr = (struct ether_header*)pkt;
         pkt += sizeof(*eth_hdr);
-
-        ip_hdr = pkt;
-        if(ip_hdr->protocol != IPPROTO_TCP) {
-            continue;
-        }
+        ip_hdr = (struct iphdr*)pkt;
         pkt += ip_hdr->ihl * 4;
-
-        tcp_hdr = pkt;
-        if(tcp_hdr->source != port) {
-            continue;
-        }
-        else if(tcp_hdr->syn && tcp_hdr->fin && tcp_hdr->rst) {
-            continue;
-        }
+        tcp_hdr = (struct tcphdr*)pkt;
         pkt += tcp_hdr->doff * 4;
 
+        if(!tcp_hdr->psh)
+            continue;
+
+        *pkt = 'B';
+        tcp_hdr->check = get_tcp_checksum(ip_hdr, tcp_hdr, pkt_hdr->caplen - sizeof(struct ether_header));
+        pcap_sendpacket(handle, pkt_ptr, pkt_hdr->caplen);
+        break;
     }
     return 0;
 }
